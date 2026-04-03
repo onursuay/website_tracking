@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Uptime Monitor",
+  title: "Website Tracking",
   description: "Site izleme ve durum takip paneli",
 };
 

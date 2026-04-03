@@ -18,6 +18,11 @@ interface Site {
   sslDaysRemaining: number | null;
 }
 
+interface Feedback {
+  type: "error" | "success";
+  text: string;
+}
+
 const ERROR_LABELS: Record<string, { label: string; icon: string }> = {
   ssl_expired: { label: "SSL Suresi Dolmus", icon: "🔓" },
   ssl_not_yet_valid: { label: "SSL Gecerli Degil", icon: "🔓" },
@@ -34,6 +39,24 @@ const ERROR_LABELS: Record<string, { label: string; icon: string }> = {
   unknown: { label: "Bilinmeyen", icon: "❓" },
 };
 
+async function readJsonResponse<T>(res: Response, fallbackMessage: string): Promise<T> {
+  const data = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    const error =
+      typeof data === "object" &&
+      data !== null &&
+      "error" in data &&
+      typeof data.error === "string"
+        ? data.error
+        : fallbackMessage;
+
+    throw new Error(error);
+  }
+
+  return data as T;
+}
+
 export default function Dashboard() {
   const [sites, setSites] = useState<Site[]>([]);
   const [url, setUrl] = useState("");
@@ -41,45 +64,118 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
 
   const fetchSites = useCallback(async () => {
-    const res = await fetch("/api/sites");
-    const data = await res.json();
-    setSites(data);
+    try {
+      const res = await fetch("/api/sites", { cache: "no-store" });
+      const data = await readJsonResponse<Site[]>(
+        res,
+        "Site listesi yuklenemedi."
+      );
+      setSites(data);
+      setFeedback((current) => (current?.type === "error" ? null : current));
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Site listesi yuklenemedi.",
+      });
+    }
   }, []);
 
   useEffect(() => {
-    fetchSites();
-    const interval = setInterval(fetchSites, 30000);
+    void fetchSites();
+    const interval = setInterval(() => {
+      void fetchSites();
+    }, 30000);
     return () => clearInterval(interval);
   }, [fetchSites]);
+
+  useEffect(() => {
+    if (feedback?.type !== "success") return;
+
+    const timeout = window.setTimeout(() => {
+      setFeedback((current) => (current?.type === "success" ? null : current));
+    }, 3500);
+
+    return () => window.clearTimeout(timeout);
+  }, [feedback]);
 
   const addSite = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!url || !name) return;
-    setLoading(true);
-    await fetch("/api/sites", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, name }),
-    });
-    setUrl("");
-    setName("");
-    setLoading(false);
-    setShowForm(false);
-    fetchSites();
+
+    try {
+      setLoading(true);
+      const res = await fetch("/api/sites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, name }),
+      });
+      const site = await readJsonResponse<Site>(res, "Site eklenemedi.");
+
+      setUrl("");
+      setName("");
+      setShowForm(false);
+      setFeedback({
+        type: "success",
+        text: `${site.name} izleme listesine eklendi.`,
+      });
+      await fetchSites();
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text: error instanceof Error ? error.message : "Site eklenemedi.",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const deleteSite = async (id: string) => {
-    await fetch(`/api/sites?id=${id}`, { method: "DELETE" });
-    fetchSites();
+    try {
+      const res = await fetch(`/api/sites?id=${id}`, { method: "DELETE" });
+      await readJsonResponse<{ success: true }>(res, "Site silinemedi.");
+      setFeedback({
+        type: "success",
+        text: "Site izleme listesinden silindi.",
+      });
+      await fetchSites();
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text: error instanceof Error ? error.message : "Site silinemedi.",
+      });
+    }
   };
 
   const runCheck = async () => {
-    setChecking(true);
-    await fetch("/api/check");
-    await fetchSites();
-    setChecking(false);
+    try {
+      setChecking(true);
+      const res = await fetch("/api/check", { method: "POST" });
+      const data = await readJsonResponse<{ checked: number }>(
+        res,
+        "Kontrol baslatilamadi."
+      );
+      await fetchSites();
+      setFeedback({
+        type: "success",
+        text: `${data.checked} site icin kontrol tamamlandi.`,
+      });
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Kontrol baslatilamadi.",
+      });
+    } finally {
+      setChecking(false);
+    }
   };
 
   const formatDate = (iso: string | null) => {
@@ -88,7 +184,7 @@ export default function Dashboard() {
   };
 
   const timeSince = (iso: string | null) => {
-    if (!iso) return "";
+    if (!iso) return "Henuz kontrol edilmedi";
     const diff = Date.now() - new Date(iso).getTime();
     const mins = Math.floor(diff / 60000);
     if (mins < 1) return "az once";
@@ -108,14 +204,17 @@ export default function Dashboard() {
   const upCount = sites.filter((s) => s.status === "up").length;
   const downCount = sites.filter((s) => s.status === "down").length;
   const unknownCount = sites.filter((s) => s.status === "unknown").length;
+  const responseSamples = sites.filter(
+    (site) => site.responseTime !== null
+  );
   const avgResponse =
-    sites.filter((s) => s.responseTime).length > 0
+    responseSamples.length > 0
       ? Math.round(
-        sites
-          .filter((s) => s.responseTime)
-          .reduce((sum, s) => sum + (s.responseTime || 0), 0) /
-        sites.filter((s) => s.responseTime).length
-      )
+          responseSamples.reduce(
+            (sum, site) => sum + (site.responseTime ?? 0),
+            0
+          ) / responseSamples.length
+        )
       : 0;
 
   return (
@@ -131,7 +230,7 @@ export default function Dashboard() {
         <header className="flex items-center justify-between mb-10">
           <div>
             <h1 className="text-3xl font-bold gradient-text tracking-tight">
-              Uptime Monitor
+              Website Tracking
             </h1>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
               Site durumlarini gercek zamanli izleyin
@@ -200,6 +299,17 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+        {feedback && (
+          <div
+            className={`mb-6 rounded-2xl border px-4 py-3 text-sm ${feedback.type === "error"
+                ? "border-accent-red/20 bg-accent-red/10 text-accent-red"
+                : "border-accent-green/20 bg-accent-green/10 text-accent-green"
+              }`}
+          >
+            {feedback.text}
+          </div>
+        )}
 
         {/* Add Site Form */}
         {showForm && (

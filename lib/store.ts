@@ -1,3 +1,5 @@
+import { promises as fs } from "fs";
+import path from "path";
 import { Redis } from "@upstash/redis";
 
 export interface Site {
@@ -16,19 +18,126 @@ export interface Site {
 }
 
 const SITES_KEY = "uptime:sites";
+const SEED_SITES_FILE = path.join(process.cwd(), "data", "sites.json");
+const LOCAL_SITES_FILE = path.join(process.cwd(), "data", "sites.local.json");
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
+const redis =
+  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+    ? new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN,
+      })
+    : null;
+
+let hasLoggedLocalFallback = false;
+
+function logLocalFallback() {
+  if (hasLoggedLocalFallback) return;
+  hasLoggedLocalFallback = true;
+  console.warn(
+    "[Store] Upstash Redis tanimli degil. Lokal veri depolamasi icin data/sites.local.json kullaniliyor."
+  );
+}
+
+function normalizeSite(site: Partial<Site>): Site | null {
+  if (!site.id || !site.url || !site.name) {
+    return null;
+  }
+
+  return {
+    id: site.id,
+    url: site.url,
+    name: site.name,
+    addedAt: site.addedAt ?? new Date().toISOString(),
+    lastCheck: site.lastCheck ?? null,
+    status:
+      site.status === "up" || site.status === "down" || site.status === "unknown"
+        ? site.status
+        : "unknown",
+    downSince: site.downSince ?? null,
+    notifiedAt: site.notifiedAt ?? null,
+    lastError: site.lastError ?? null,
+    errorType: site.errorType ?? null,
+    responseTime:
+      typeof site.responseTime === "number" ? site.responseTime : null,
+    sslDaysRemaining:
+      typeof site.sslDaysRemaining === "number" ? site.sslDaysRemaining : null,
+  };
+}
+
+function normalizeSites(sites: unknown): Site[] {
+  if (!Array.isArray(sites)) {
+    return [];
+  }
+
+  return sites
+    .map((site) => normalizeSite(site as Partial<Site>))
+    .filter((site): site is Site => site !== null);
+}
+
+async function readJsonArray(filePath: string): Promise<unknown[]> {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    console.error(`[Store] ${filePath} okunamadi:`, error);
+    return [];
+  }
+}
+
+async function ensureLocalSitesFile(): Promise<void> {
+  try {
+    await fs.access(LOCAL_SITES_FILE);
+  } catch {
+    const seedSites = normalizeSites(await readJsonArray(SEED_SITES_FILE));
+    await fs.mkdir(path.dirname(LOCAL_SITES_FILE), { recursive: true });
+    await fs.writeFile(
+      LOCAL_SITES_FILE,
+      `${JSON.stringify(seedSites, null, 2)}\n`,
+      "utf8"
+    );
+  }
+}
+
+async function readSitesFromFile(): Promise<Site[]> {
+  logLocalFallback();
+  await ensureLocalSitesFile();
+  return normalizeSites(await readJsonArray(LOCAL_SITES_FILE));
+}
+
+async function saveSitesToFile(sites: Site[]): Promise<void> {
+  logLocalFallback();
+  await fs.mkdir(path.dirname(LOCAL_SITES_FILE), { recursive: true });
+  await fs.writeFile(
+    LOCAL_SITES_FILE,
+    `${JSON.stringify(normalizeSites(sites), null, 2)}\n`,
+    "utf8"
+  );
+}
 
 export async function getSites(): Promise<Site[]> {
+  if (!redis) {
+    return readSitesFromFile();
+  }
+
   const data = await redis.get<Site[]>(SITES_KEY);
-  return data || [];
+  return normalizeSites(data);
 }
 
 export async function saveSites(sites: Site[]): Promise<void> {
-  await redis.set(SITES_KEY, sites);
+  const normalizedSites = normalizeSites(sites);
+
+  if (!redis) {
+    await saveSitesToFile(normalizedSites);
+    return;
+  }
+
+  await redis.set(SITES_KEY, normalizedSites);
 }
 
 export async function addSite(url: string, name: string): Promise<Site> {

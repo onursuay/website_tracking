@@ -7,7 +7,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { url, name } = await req.json();
+  const payload = await req.json();
+  const url = typeof payload.url === "string" ? payload.url.trim() : "";
+  const name = typeof payload.name === "string" ? payload.name.trim() : "";
 
   if (!url || !name) {
     return NextResponse.json(
@@ -16,9 +18,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  let normalizedUrl: string;
+
   // URL formatini kontrol et
   try {
-    new URL(url);
+    const parsedUrl = new URL(url);
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      throw new Error("unsupported_protocol");
+    }
+    normalizedUrl = parsedUrl.toString();
   } catch {
     return NextResponse.json(
       { error: "Gecersiz URL formati" },
@@ -26,7 +34,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const site = await addSite(url, name);
+  const sites = await getSites();
+  if (sites.some((site) => site.url === normalizedUrl)) {
+    return NextResponse.json(
+      { error: "Bu URL zaten izleniyor" },
+      { status: 409 }
+    );
+  }
+
+  const site = await addSite(normalizedUrl, name);
   return NextResponse.json(site, { status: 201 });
 }
 

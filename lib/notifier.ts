@@ -1,6 +1,28 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let resend: Resend | null = null;
+let hasWarnedMissingKey = false;
+
+function getResendClient(): Resend | null {
+  const apiKey = process.env.RESEND_API_KEY;
+
+  if (!apiKey) {
+    if (!hasWarnedMissingKey) {
+      hasWarnedMissingKey = true;
+      console.warn(
+        "[Notifier] RESEND_API_KEY tanimli degil. E-posta bildirimleri devre disi."
+      );
+    }
+
+    return null;
+  }
+
+  if (!resend) {
+    resend = new Resend(apiKey);
+  }
+
+  return resend;
+}
 
 interface NotifyParams {
   siteName: string;
@@ -15,6 +37,11 @@ export async function sendDownAlert({
   error,
   downSince,
 }: NotifyParams): Promise<boolean> {
+  const resendClient = getResendClient();
+  if (!resendClient) {
+    return false;
+  }
+
   const notifyEmail = process.env.NOTIFY_EMAIL || "onursuay@hotmail.com";
 
   const downDate = new Date(downSince);
@@ -24,8 +51,8 @@ export async function sendDownAlert({
   );
 
   try {
-    await resend.emails.send({
-      from: "Uptime Monitor <onboarding@resend.dev>",
+    await resendClient.emails.send({
+      from: "Website Tracking <onboarding@resend.dev>",
       to: notifyEmail,
       subject: `🔴 SITE DOWN: ${siteName} (${downHours}+ saat)`,
       html: `
@@ -58,7 +85,7 @@ export async function sendDownAlert({
             </table>
           </div>
           <p style="color: #9ca3af; font-size: 12px; text-align: center; margin-top: 16px;">
-            Uptime Monitor tarafindan gonderildi
+            Website Tracking tarafindan gonderildi
           </p>
         </div>
       `,
@@ -75,6 +102,11 @@ export async function sendRecoveryAlert({
   siteUrl,
   downSince,
 }: Omit<NotifyParams, "error">): Promise<boolean> {
+  const resendClient = getResendClient();
+  if (!resendClient) {
+    return false;
+  }
+
   const notifyEmail = process.env.NOTIFY_EMAIL || "onursuay@hotmail.com";
 
   const downDate = new Date(downSince);
@@ -84,8 +116,8 @@ export async function sendRecoveryAlert({
   );
 
   try {
-    await resend.emails.send({
-      from: "Uptime Monitor <onboarding@resend.dev>",
+    await resendClient.emails.send({
+      from: "Website Tracking <onboarding@resend.dev>",
       to: notifyEmail,
       subject: `🟢 SITE RECOVERED: ${siteName}`,
       html: `
