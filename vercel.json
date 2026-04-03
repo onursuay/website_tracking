@@ -2,7 +2,11 @@
   "crons": [
     {
       "path": "/api/check",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/report/weekly",
+      "schedule": "0 6 * * 1"
     }
   ]
 }
