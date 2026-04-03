@@ -1,19 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkUrl } from "@/lib/checker";
-import {
-  appendHistory,
-  getOpenIncident,
-  isMaintenanceActive,
-  upsertIncident,
-} from "@/lib/site-utils";
-import { sendDownAlert, sendRecoveryAlert } from "@/lib/notifier";
 import { getSites, updateSite } from "@/lib/store";
-import { CheckHistoryEntry, Incident, Site, SslInfo } from "@/lib/types";
+import { checkUrl } from "@/lib/checker";
+import { sendDownAlert, sendRecoveryAlert } from "@/lib/notifier";
 
-export const maxDuration = 60;
-export const dynamic = "force-dynamic";
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 
-const HOUR_MS = 60 * 60 * 1000;
+export const maxDuration = 60; // Vercel's 10s limit override for this route
+export const dynamic = "force-dynamic"; // Do not cache this route
 
 function isCronAuthorized(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET;
@@ -25,102 +18,33 @@ function isCronAuthorized(req: NextRequest): boolean {
   return req.headers.get("authorization") === `Bearer ${cronSecret}`;
 }
 
-function buildSslUpdates(site: Site, sslInfo: SslInfo | null) {
-  return {
-    sslDaysRemaining: sslInfo?.daysRemaining ?? site.sslDaysRemaining,
-    sslIssuer: sslInfo?.issuer ?? site.sslIssuer,
-    sslSubject: sslInfo?.subject ?? site.sslSubject,
-    sslValidFrom: sslInfo?.validFrom ?? site.sslValidFrom,
-    sslValidTo: sslInfo?.validTo ?? site.sslValidTo,
-  };
-}
-
-async function runChecks(force = false) {
+async function runChecks() {
   const sites = await getSites();
   const results = [];
-  let checked = 0;
-  let skipped = 0;
 
   for (const site of sites) {
-    const nowDate = new Date();
-    const now = nowDate.toISOString();
-    const intervalMs = site.rules.checkIntervalHours * HOUR_MS;
-    const lastCheckAt = site.lastCheck ? new Date(site.lastCheck).getTime() : 0;
-
-    if (!force && site.lastCheck && nowDate.getTime() - lastCheckAt < intervalMs) {
-      skipped += 1;
-      results.push({
-        id: site.id,
-        name: site.name,
-        status: "skipped",
-        nextDueAt: new Date(lastCheckAt + intervalMs).toISOString(),
-      });
-      continue;
-    }
-
-    checked += 1;
-
-    const result = await checkUrl(site.url, {
-      timeoutMs: site.rules.timeoutMs,
-      slowThresholdMs: site.rules.slowThresholdMs,
-      expectedContent: site.rules.expectedContent,
-      expectedStatusCodes: site.rules.expectedStatusCodes,
-      expectedHeaderName: site.rules.expectedHeaderName,
-      expectedHeaderValue: site.rules.expectedHeaderValue,
-      expectedFinalUrlContains: site.rules.expectedFinalUrlContains,
-    });
-
-    const maintenanceActive = isMaintenanceActive(site.rules, nowDate.getTime());
-    const historyEntry: CheckHistoryEntry = {
-      checkedAt: now,
-      status: result.isUp ? "up" : "down",
-      statusCode: result.statusCode,
-      responseTime: result.responseTime,
-      errorType: result.errorType === "none" ? null : result.errorType,
-      message: result.error,
-      location: "local-tr",
-      slow: result.errorType === "too_slow",
-    };
+    const result = await checkUrl(site.url);
+    const now = new Date().toISOString();
+    const sslDays = result.sslInfo?.daysRemaining ?? null;
 
     if (result.isUp) {
-      let incidents = site.incidents;
-      const openIncident = getOpenIncident(site);
-
-      if (openIncident && site.downSince) {
-        const resolvedIncident: Incident = {
-          ...openIncident,
-          resolvedAt: now,
-          durationMinutes: Math.max(
-            1,
-            Math.round(
-              (nowDate.getTime() - new Date(openIncident.startedAt).getTime()) / 60000
-            )
-          ),
-        };
-        incidents = upsertIncident(site.incidents, resolvedIncident);
-
-        if (site.notifiedAt && !maintenanceActive) {
-          await sendRecoveryAlert({
-            siteName: site.name,
-            siteUrl: site.url,
-            downSince: site.downSince,
-            sendEmail: site.rules.emailAlerts,
-            sendWhatsApp: site.rules.whatsappAlerts,
-          });
-        }
+      if (site.downSince && site.notifiedAt) {
+        await sendRecoveryAlert({
+          siteName: site.name,
+          siteUrl: site.url,
+          downSince: site.downSince,
+        });
       }
 
       await updateSite(site.id, {
         status: "up",
         lastCheck: now,
-        lastError: result.error,
+        lastError: result.error, // SSL uyarısı olabilir
         errorType: result.errorType !== "none" ? result.errorType : null,
         downSince: null,
-        notifiedAt: null,
+        notifiedAt: site.downSince ? null : site.notifiedAt,
         responseTime: result.responseTime,
-        history: appendHistory(site.history, historyEntry),
-        incidents,
-        ...buildSslUpdates(site, result.sslInfo),
+        sslDaysRemaining: sslDays,
       });
 
       results.push({
@@ -128,92 +52,56 @@ async function runChecks(force = false) {
         name: site.name,
         status: "up",
         responseTime: result.responseTime,
-        maintenanceActive,
+        sslDaysRemaining: sslDays,
       });
-      continue;
-    }
-
-    const downSince = site.downSince || now;
-    const downDuration = nowDate.getTime() - new Date(downSince).getTime();
-    const notificationThresholdMs =
-      site.rules.notificationThresholdHours * HOUR_MS;
-
-    let openIncident = getOpenIncident(site);
-    let incidents = site.incidents;
-    let notifiedAt = site.notifiedAt;
-
-    if (!openIncident) {
-      openIncident = {
-        id: crypto.randomUUID(),
-        startedAt: downSince,
-        resolvedAt: null,
-        durationMinutes: null,
-        message: result.error || `HTTP ${result.statusCode}`,
-        errorType: result.errorType,
-        notifiedAt: null,
-        channels: [],
-      };
     } else {
-      openIncident = {
-        ...openIncident,
-        message: result.error || openIncident.message,
-        errorType: result.errorType,
-      };
-    }
+      const downSince = site.downSince || now;
+      const downDuration = Date.now() - new Date(downSince).getTime();
+      let notifiedAt = site.notifiedAt;
 
-    if (
-      downDuration >= notificationThresholdMs &&
-      !openIncident.notifiedAt &&
-      !maintenanceActive
-    ) {
-      const delivery = await sendDownAlert({
-        siteName: site.name,
-        siteUrl: site.url,
-        error: `[${result.errorType}] ${result.error || `HTTP ${result.statusCode}`}`,
+      if (downDuration >= FIVE_HOURS_MS) {
+        // Send email only if we haven't notified for this specific downtime incident yet
+        // meaning `site.notifiedAt` is null (never notified since it went down 5+ hours ago)
+        const shouldNotify = !site.notifiedAt;
+
+        if (shouldNotify) {
+          const errorDetail = `[${result.errorType}] ${result.error || `HTTP ${result.statusCode}`}`;
+          const sent = await sendDownAlert({
+            siteName: site.name,
+            siteUrl: site.url,
+            error: errorDetail,
+            downSince,
+          });
+          if (sent) {
+            notifiedAt = now;
+          }
+        }
+      }
+
+      await updateSite(site.id, {
+        status: "down",
+        lastCheck: now,
+        lastError: result.error || `HTTP ${result.statusCode}`,
+        errorType: result.errorType,
         downSince,
-        sendEmail: site.rules.emailAlerts,
-        sendWhatsApp: site.rules.whatsappAlerts,
+        notifiedAt,
+        responseTime: result.responseTime,
+        sslDaysRemaining: sslDays,
       });
 
-      if (delivery.sentAny) {
-        notifiedAt = now;
-        openIncident = {
-          ...openIncident,
-          notifiedAt: now,
-          channels: delivery.channels,
-        };
-      }
+      results.push({
+        id: site.id,
+        name: site.name,
+        status: "down",
+        errorType: result.errorType,
+        error: result.error,
+        responseTime: result.responseTime,
+      });
     }
-
-    incidents = upsertIncident(incidents, openIncident);
-
-    await updateSite(site.id, {
-      status: "down",
-      lastCheck: now,
-      lastError: result.error || `HTTP ${result.statusCode}`,
-      errorType: result.errorType,
-      downSince,
-      notifiedAt,
-      responseTime: result.responseTime,
-      history: appendHistory(site.history, historyEntry),
-      incidents,
-      ...buildSslUpdates(site, result.sslInfo),
-    });
-
-    results.push({
-      id: site.id,
-      name: site.name,
-      status: "down",
-      errorType: result.errorType,
-      error: result.error,
-      responseTime: result.responseTime,
-      maintenanceActive,
-    });
   }
 
   return NextResponse.json({
-    checked,
-    skipped,
+    checked: results.length,
     timestamp: new Date().toISOString(),
     results,
   });
@@ -224,9 +112,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Yetkisiz erişim" }, { status: 401 });
   }
 
-  return runChecks(false);
+  return runChecks();
 }
 
 export async function POST() {
-  return runChecks(true);
+  return runChecks();
 }

@@ -1,11 +1,11 @@
-const INTERVAL = 60 * 60 * 1000; // 1 saat
+const INTERVAL = 5 * 60 * 1000; // 5 dakika
 let started = false;
 
 export function startCron(baseUrl: string) {
   if (started) return;
   started = true;
 
-  console.log(`[Cron] Otomatik kontrol başladı (saat başı)`);
+  console.log(`[Cron] Otomatik kontrol basladi (her 5 dk)`);
 
   const run = async () => {
     try {
@@ -15,7 +15,7 @@ export function startCron(baseUrl: string) {
       });
       const data = await res.json();
       console.log(
-        `[Cron] Kontrol tamamlandı: ${data.checked} site, ${data.skipped ?? 0} atlandı, ${new Date().toLocaleString("tr-TR")}`
+        `[Cron] Kontrol tamamlandi: ${data.checked} site, ${new Date().toLocaleString("tr-TR")}`
       );
     } catch (err) {
       console.error(`[Cron] Hata:`, err);

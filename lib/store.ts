@@ -1,14 +1,21 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { Redis } from "@upstash/redis";
-import {
-  normalizeHistory,
-  normalizeIncidents,
-  normalizeRules,
-  sanitizeTags,
-  sanitizeText,
-} from "@/lib/site-utils";
-import { Site } from "@/lib/types";
+
+export interface Site {
+  id: string;
+  url: string;
+  name: string;
+  addedAt: string;
+  lastCheck: string | null;
+  status: "up" | "down" | "unknown";
+  downSince: string | null;
+  notifiedAt: string | null;
+  lastError: string | null;
+  errorType: string | null;
+  responseTime: number | null;
+  sslDaysRemaining: number | null;
+}
 
 const SITES_KEY = "uptime:sites";
 const SEED_SITES_FILE = path.join(process.cwd(), "data", "sites.json");
@@ -28,7 +35,7 @@ function logLocalFallback() {
   if (hasLoggedLocalFallback) return;
   hasLoggedLocalFallback = true;
   console.warn(
-    "[Store] Upstash Redis tanımlı değil. Lokal veri depolaması için data/sites.local.json kullanılıyor."
+    "[Store] Upstash Redis tanimli degil. Lokal veri depolamasi icin data/sites.local.json kullaniliyor."
   );
 }
 
@@ -41,30 +48,20 @@ function normalizeSite(site: Partial<Site>): Site | null {
     id: site.id,
     url: site.url,
     name: site.name,
-    group: sanitizeText(site.group) ?? "Genel",
-    tags: sanitizeTags(site.tags),
-    note: sanitizeText(site.note),
     addedAt: site.addedAt ?? new Date().toISOString(),
-    lastCheck: sanitizeText(site.lastCheck),
+    lastCheck: site.lastCheck ?? null,
     status:
       site.status === "up" || site.status === "down" || site.status === "unknown"
         ? site.status
         : "unknown",
-    downSince: sanitizeText(site.downSince),
-    notifiedAt: sanitizeText(site.notifiedAt),
-    lastError: sanitizeText(site.lastError),
-    errorType: typeof site.errorType === "string" ? site.errorType : null,
+    downSince: site.downSince ?? null,
+    notifiedAt: site.notifiedAt ?? null,
+    lastError: site.lastError ?? null,
+    errorType: site.errorType ?? null,
     responseTime:
       typeof site.responseTime === "number" ? site.responseTime : null,
     sslDaysRemaining:
       typeof site.sslDaysRemaining === "number" ? site.sslDaysRemaining : null,
-    sslIssuer: sanitizeText(site.sslIssuer),
-    sslSubject: sanitizeText(site.sslSubject),
-    sslValidFrom: sanitizeText(site.sslValidFrom),
-    sslValidTo: sanitizeText(site.sslValidTo),
-    rules: normalizeRules(site.rules),
-    history: normalizeHistory(site.history),
-    incidents: normalizeIncidents(site.incidents),
   };
 }
 
@@ -88,7 +85,7 @@ async function readJsonArray(filePath: string): Promise<unknown[]> {
       return [];
     }
 
-    console.error(`[Store] ${filePath} okunamadı:`, error);
+    console.error(`[Store] ${filePath} okunamadi:`, error);
     return [];
   }
 }
@@ -143,17 +140,12 @@ export async function saveSites(sites: Site[]): Promise<void> {
   await redis.set(SITES_KEY, normalizedSites);
 }
 
-export async function addSite(
-  payload: Pick<Site, "url" | "name"> & Partial<Pick<Site, "group" | "tags" | "note">>
-): Promise<Site> {
+export async function addSite(url: string, name: string): Promise<Site> {
   const sites = await getSites();
-  const site: Site = normalizeSite({
+  const site: Site = {
     id: crypto.randomUUID(),
-    url: payload.url,
-    name: payload.name,
-    group: payload.group ?? "Genel",
-    tags: payload.tags ?? [],
-    note: payload.note ?? null,
+    url,
+    name,
     addedAt: new Date().toISOString(),
     lastCheck: null,
     status: "unknown",
@@ -163,15 +155,7 @@ export async function addSite(
     errorType: null,
     responseTime: null,
     sslDaysRemaining: null,
-    sslIssuer: null,
-    sslSubject: null,
-    sslValidFrom: null,
-    sslValidTo: null,
-    rules: undefined,
-    history: [],
-    incidents: [],
-  }) as Site;
-
+  };
   sites.push(site);
   await saveSites(sites);
   return site;
@@ -179,27 +163,19 @@ export async function addSite(
 
 export async function removeSite(id: string): Promise<boolean> {
   const sites = await getSites();
-  const filtered = sites.filter((site) => site.id !== id);
+  const filtered = sites.filter((s) => s.id !== id);
   if (filtered.length === sites.length) return false;
   await saveSites(filtered);
   return true;
 }
 
-export async function updateSite(id: string, updates: Partial<Site>): Promise<Site | null> {
+export async function updateSite(
+  id: string,
+  updates: Partial<Site>
+): Promise<void> {
   const sites = await getSites();
-  const index = sites.findIndex((site) => site.id === id);
-
-  if (index === -1) {
-    return null;
-  }
-
-  const nextSite = normalizeSite({ ...sites[index], ...updates });
-
-  if (!nextSite) {
-    return null;
-  }
-
-  sites[index] = nextSite;
+  const index = sites.findIndex((s) => s.id === id);
+  if (index === -1) return;
+  sites[index] = { ...sites[index], ...updates };
   await saveSites(sites);
-  return nextSite;
 }
