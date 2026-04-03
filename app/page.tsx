@@ -412,10 +412,13 @@ export default function Dashboard() {
                             const isSSL = site.errorType.startsWith("ssl_");
                             return (
                               <span
-                                className={`text-xs px-2 py-0.5 rounded-full border ${isSSL
+                                className={`text-xs px-2 py-0.5 rounded-full border ${
+                                  isSSL
                                     ? "bg-accent-yellow/10 text-accent-yellow border-accent-yellow/20"
-                                    : "bg-accent-red/10 text-accent-red border-accent-red/20"
-                                  }`}
+                                    : site.errorType === "too_slow"
+                                      ? "bg-accent-green/10 text-accent-green border-accent-green/20"
+                                      : "bg-accent-red/10 text-accent-red border-accent-red/20"
+                                }`}
                               >
                                 {info.icon} {info.label}
                               </span>
@@ -440,7 +443,13 @@ export default function Dashboard() {
 
                         {/* Response time */}
                         {site.responseTime !== null && (
-                          <span className={`text-xs ${responseColor(site.responseTime)}`}>
+                          <span
+                            className={`text-xs ${
+                              site.errorType === "too_slow"
+                                ? "text-accent-green"
+                                : responseColor(site.responseTime)
+                            }`}
+                          >
                             ⚡ {site.responseTime}ms
                           </span>
                         )}
@@ -448,7 +457,13 @@ export default function Dashboard() {
 
                       {/* Error detail */}
                       {site.lastError && (
-                        <div className="mt-2 text-xs text-accent-red/80 bg-accent-red/5 border border-accent-red/10 rounded-lg px-3 py-2">
+                        <div
+                          className={`mt-2 text-xs rounded-lg px-3 py-2 ${
+                            site.errorType === "too_slow"
+                              ? "text-accent-green/90 bg-accent-green/5 border border-accent-green/10"
+                              : "text-accent-red/80 bg-accent-red/5 border border-accent-red/10"
+                          }`}
+                        >
                           {site.lastError}
                         </div>
                       )}
