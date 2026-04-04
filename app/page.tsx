@@ -229,12 +229,11 @@ export default function Dashboard() {
         {/* Header */}
         <header className="flex items-center justify-between mb-10">
           <div>
-            <h1 className="text-3xl font-bold gradient-text tracking-tight">
-              Website Tracking
-            </h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              Site durumlarını gerçek zamanlı izleyin
-            </p>
+            <img
+              src="/we_logo.png"
+              alt="Website Tracking logo"
+              className="h-20 w-auto object-contain"
+            />
           </div>
           <div className="flex items-center gap-3">
             <ModeToggle />
