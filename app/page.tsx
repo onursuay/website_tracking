@@ -225,14 +225,14 @@ export default function Dashboard() {
         <div className="absolute top-1/2 -left-40 w-80 h-80 bg-accent-blue/5 rounded-full blur-[100px]" />
       </div>
 
-      <div className="relative max-w-6xl mx-auto px-6 py-10">
+      <div className="relative max-w-6xl mx-auto px-6 py-6">
         {/* Header */}
-        <header className="flex items-center justify-between mb-10">
-          <div>
+        <header className="flex items-center justify-between mb-8">
+          <div className="logo-shine relative inline-flex overflow-hidden rounded-2xl">
             <img
               src="/we_logo.png"
               alt="Website Tracking logo"
-              className="h-20 w-auto object-contain"
+              className="h-24 w-auto object-contain md:h-28"
             />
           </div>
           <div className="flex items-center gap-3">

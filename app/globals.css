@@ -83,6 +83,49 @@ body {
   animation: pulse-red 1.5s ease-in-out infinite;
 }
 
+@keyframes logo-shine {
+  0% {
+    transform: translateX(-160%) skewX(-18deg);
+    opacity: 0;
+  }
+
+  18% {
+    opacity: 0.2;
+  }
+
+  50% {
+    opacity: 0.55;
+  }
+
+  82% {
+    opacity: 0.2;
+  }
+
+  100% {
+    transform: translateX(220%) skewX(-18deg);
+    opacity: 0;
+  }
+}
+
+.logo-shine::after {
+  content: "";
+  position: absolute;
+  inset: -18% auto -18% -35%;
+  width: 34%;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 18%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(59, 130, 246, 0.35) 72%,
+    transparent 100%
+  );
+  filter: blur(10px);
+  mix-blend-mode: screen;
+  animation: logo-shine 3.8s ease-in-out infinite;
+}
+
 /* Glass card */
 .glass-card {
   background: var(--color-glass);
